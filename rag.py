@@ -3,7 +3,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 
 DB_DIR = "./chroma_db"
@@ -35,16 +35,53 @@ def get_chain():
 
     llm = ChatOllama(model="qwen2.5:7b", temperature=0)
 
-    chain = (
+    answer_chain = (
         {"context": retriever | format_docs, "question": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()
     )
+
+    # Возвращаем и ответ, и сами документы
+    chain = RunnableParallel(
+        answer=answer_chain,
+        sources=retriever,
+    )
     return chain
+
+
+def print_result(result):
+    # ---- Ответ ----
+    print("\n" + "═" * 70)
+    print("  ОТВЕТ")
+    print("═" * 70)
+    print(result["answer"])
+
+    # ---- Источники ----
+    print("\n" + "═" * 70)
+    print(f"  ИСТОЧНИКИ (найдено: {len(result['sources'])})")
+    print("═" * 70)
+
+    for i, doc in enumerate(result["sources"], 1):
+        m = doc.metadata
+        print(f"\n[{i}] {m.get('name', '?')}")
+        print(f"    Путь:            {m.get('path', '?')}")
+        print(f"    Уровень:         {m.get('level', '?')}")
+        print(f"    ID узла:         {m.get('id', '—')}")
+
+        # description_category_id самого узла (или ближайшей категории)
+        cat = m.get("category_id")
+        parent_cat = m.get("parent_category_id")
+        grand_cat = m.get("grandparent_category_id")
+
+        print(f"    Категория (desc): {cat if cat is not None else '—'}")
+        print(f"    Родитель (desc):  {parent_cat if parent_cat is not None else '—'}")
+        print(f"    Уровень выше:     {grand_cat if grand_cat is not None else '—'}")
+
+        print("    " + "─" * 60)
 
 
 if __name__ == "__main__":
     chain = get_chain()
-    answer = chain.invoke("Найди категорию для шампуней")
-    print(answer)
+    result = chain.invoke("Найди категорию для фильмов")
+    print_result(result)
