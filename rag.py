@@ -2,11 +2,15 @@ import json
 import re
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from dotenv import load_dotenv
 from openai import OpenAI
+import os
 
 # 1. Подключение к существующей базе ChromaDB
 DB_DIR = "./chroma_db"
 COLLECTION = "ozon_categories"
+
+load_dotenv()
 
 embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-base")
 
@@ -17,7 +21,7 @@ db = Chroma(
 )
 
 # 2. Настройка подключения через VseGPT
-VSEGPT_API_KEY = "sk-or-vis-7fb009-2000d2829fb717d676392f552d0919f5c6d64a0229e85cf9bf96b2b28ec3f094"
+VSEGPT_API_KEY = os.getenv("VSEGPT_API_KEY")
 
 client = OpenAI(
     api_key=VSEGPT_API_KEY,
