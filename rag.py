@@ -1,87 +1,87 @@
-import os
+import json
+import re
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
-from langchain_core.output_parsers import StrOutputParser
+from openai import OpenAI
 
+# 1. Подключение к существующей базе ChromaDB
 DB_DIR = "./chroma_db"
 COLLECTION = "ozon_categories"
 
+embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-base")
 
-def format_docs(docs):
-    return "\n\n---\n\n".join(
-        f"{d.page_content}\n(источник: {d.metadata.get('path', '?')})"
-        for d in docs
-    )
+db = Chroma(
+    persist_directory=DB_DIR,
+    embedding_function=embeddings,
+    collection_name=COLLECTION,
+)
 
+# 2. Настройка подключения через VseGPT
+VSEGPT_API_KEY = "sk-or-vis-7fb009-2000d2829fb717d676392f552d0919f5c6d64a0229e85cf9bf96b2b28ec3f094"
 
-def get_chain():
-    embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-base")
-    db = Chroma(
-        persist_directory=DB_DIR,
-        embedding_function=embeddings,
-        collection_name=COLLECTION,
-    )
-    retriever = db.as_retriever(search_kwargs={"k": 4})
-
-    prompt = ChatPromptTemplate.from_template(
-        "Ты помощник по категориям Ozon. Отвечай, опираясь только на контекст.\n"
-        "Если ответа в контексте нет — честно скажи об этом.\n\n"
-        "Контекст:\n{context}\n\n"
-        "Вопрос: {question}"
-    )
-
-    llm = ChatOllama(model="qwen2.5:7b", temperature=0)
-
-    answer_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    # Возвращаем и ответ, и сами документы
-    chain = RunnableParallel(
-        answer=answer_chain,
-        sources=retriever,
-    )
-    return chain
+client = OpenAI(
+    api_key=VSEGPT_API_KEY,
+    base_url="https://api.vsegpt.ru/v1"
+)
 
 
-def print_result(result):
-    # ---- Ответ ----
-    print("\n" + "═" * 70)
-    print("  ОТВЕТ")
-    print("═" * 70)
-    print(result["answer"])
+def find_ozon_category(user_query: str, top_k: int = 8):
+    # Префикс 'query: ' обязателен для моделей семейства multilingual-e5
+    search_query = f"query: {user_query}"
 
-    # ---- Источники ----
-    print("\n" + "═" * 70)
-    print(f"  ИСТОЧНИКИ (найдено: {len(result['sources'])})")
-    print("═" * 70)
+    # Ищем близкие категории в ChromaDB
+    retrieved_docs = db.similarity_search(search_query, k=top_k)
 
-    for i, doc in enumerate(result["sources"], 1):
-        m = doc.metadata
-        print(f"\n[{i}] {m.get('name', '?')}")
-        print(f"    Путь:            {m.get('path', '?')}")
-        print(f"    Уровень:         {m.get('level', '?')}")
-        print(f"    ID узла:         {m.get('id', '—')}")
+    candidates = []
+    for doc in retrieved_docs:
+        meta = doc.metadata
+        # Берем только конечные категории товаров (уровень 3)
+        if meta.get("level") == 3:
+            candidates.append({
+                "path": meta.get("path"),
+                "description_category_id": meta.get("category_id"),
+                "type_id": meta.get("id")
+            })
 
-        # description_category_id самого узла (или ближайшей категории)
-        cat = m.get("category_id")
-        parent_cat = m.get("parent_category_id")
-        grand_cat = m.get("grandparent_category_id")
+    if not candidates:
+        return {"error": "В базе не найдены подходящие категории конечного уровня."}
 
-        print(f"    Категория (desc): {cat if cat is not None else '—'}")
-        print(f"    Родитель (desc):  {parent_cat if parent_cat is not None else '—'}")
-        print(f"    Уровень выше:     {grand_cat if grand_cat is not None else '—'}")
+    # Формируем запрос для модели
+    prompt = f"""Пользователь ищет категорию товара на Ozon: "{user_query}".
+Вот список кандидатов из справочника Ozon:
+{json.dumps(candidates, ensure_ascii=False, indent=2)}
 
-        print("    " + "─" * 60)
+Выбери ровно одну наиболее подходящую категорию.
+Верни ответ СТРОГО в формате JSON без каких-либо пояснений и без markdown-разметки:
+{{"description_category_id": <число>, "type_id": <число>, "category_name": "<строка>"}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="deepseek/deepseek-chat",  # Запуск DeepSeek V3 через VseGPT
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты эксперт по каталогу Ozon. Твоя задача — сопоставить товар с категорией и вернуть только сырой JSON-объект."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0
+        )
+
+        raw_content = response.choices[0].message.content.strip()
+
+        # Очистка на случай, если модель добавит markdown блоки ```json ... ```
+        cleaned_json = re.sub(r"^```json\s*|\s*```$", "", raw_content, flags=re.MULTILINE).strip()
+        return json.loads(cleaned_json)
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
-    chain = get_chain()
-    result = chain.invoke("Найди категорию для фильмов")
-    print_result(result)
+    query = "найди мне категорию для ботинок в поход"
+    print(f"Поисковый запрос: {query}\n")
+
+    result = find_ozon_category(query)
+    print("Итоговый результат:")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
