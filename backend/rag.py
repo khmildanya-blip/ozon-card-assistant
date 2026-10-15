@@ -61,7 +61,7 @@ def find_ozon_category(user_query: str, top_k: int = 8):
 
     try:
         response = client.chat.completions.create(
-            model="deepseek/deepseek-chat",  # Запуск DeepSeek V3 через VseGPT
+            model="deepseek/deepseek-v4.1-flash-alt-thinking",  # Запуск DeepSeek V3 через VseGPT
             messages=[
                 {
                     "role": "system",
@@ -83,9 +83,10 @@ def find_ozon_category(user_query: str, top_k: int = 8):
 
 
 if __name__ == "__main__":
-    query = "найди мне категорию для ботинок в поход"
+    query = "книга"
     print(f"Поисковый запрос: {query}\n")
 
     result = find_ozon_category(query)
     print("Итоговый результат:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
+
