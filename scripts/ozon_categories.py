@@ -1,3 +1,4 @@
+import os
 import requests
 import json
 from pathlib import Path
@@ -5,10 +6,9 @@ from pathlib import Path
 def fetch_ozon_category_tree(client_id, api_key):
     url = "https://api-seller.ozon.ru/v1/description-category/tree"
     
-    # Ключи теперь берутся из аргументов функции, а не захардкожены
     headers = {
-        "Client-Id": '5584268',
-        "Api-Key": '2a6a4be6-9a67-4a53-a555-656346e16be6',
+        "Client-Id": client_id,
+        "Api-Key": api_key,
         "Content-Type": "application/json"
     }
     
@@ -32,5 +32,9 @@ def fetch_ozon_category_tree(client_id, api_key):
         print(f"Ошибка {response.status_code}: {response.text}")
         return None
 
-# Раскомментированный вызов функции с передачей твоих ключей (не забудь заменить API-ключ на новый!)
-fetch_ozon_category_tree('5584268', '2a6a4be6-9a67-4a53-a555-656346e16be6')
+if __name__ == "__main__":
+    client_id = os.environ.get("OZON_CLIENT_ID")
+    api_key = os.environ.get("OZON_API_KEY")
+    if not client_id or not api_key:
+        raise SystemExit("Задайте OZON_CLIENT_ID и OZON_API_KEY в переменных окружения.")
+    fetch_ozon_category_tree(client_id, api_key)

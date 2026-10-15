@@ -1,3 +1,4 @@
+import os
 import requests
 import json
 from pathlib import Path
@@ -42,10 +43,12 @@ def fetch_category_attributes(client_id, api_key, category_id, type_id):
         print(f"Ошибка {response.status_code}: {response.text}")
         return None
 
-client_id = '5584268'
-api_key = '2a6a4be6-9a67-4a53-a555-656346e16be6'
+if __name__ == "__main__":
+    client_id = os.environ.get("OZON_CLIENT_ID")
+    api_key = os.environ.get("OZON_API_KEY")
+    if not client_id or not api_key:
+        raise SystemExit("Задайте OZON_CLIENT_ID и OZON_API_KEY в переменных окружения.")
 
-category_to_check = 17028715
-type_to_check = 96250
-
-fetch_category_attributes(client_id, api_key, category_to_check, type_to_check)
+    category_to_check = 17028715
+    type_to_check = 96250
+    fetch_category_attributes(client_id, api_key, category_to_check, type_to_check)
