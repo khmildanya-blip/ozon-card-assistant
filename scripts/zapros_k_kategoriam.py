@@ -1,5 +1,6 @@
 import requests
 import json
+from pathlib import Path
 
 def fetch_category_attributes(client_id, api_key, category_id, type_id):
     url = "https://api-seller.ozon.ru/v1/description-category/attribute"
@@ -24,7 +25,7 @@ def fetch_category_attributes(client_id, api_key, category_id, type_id):
         
         filename = f"attributes_{category_id}_{type_id}.json"
         
-        with open(filename, "w", encoding="utf-8") as f:
+        with open(Path(__file__).resolve().parents[1] / "data" / filename, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
             
         print(f"Атрибуты успешно сохранены в файл {filename}")

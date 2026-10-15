@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 
 def flatten_categories(categories, current_path=None, current_desc_id=None, flat_list=None):
@@ -27,14 +28,14 @@ def flatten_categories(categories, current_path=None, current_desc_id=None, flat
 
 
 # Запуск скрипта
-with open('ozon_categories.json', 'r', encoding='utf-8') as f:
+with open(Path(__file__).resolve().parents[1] / 'data' / 'ozon_categories.json', 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 # Предполагается, что категории лежат в корне по ключу "result"
 flat_data = flatten_categories(data['result'])
 
 # Сохраняем результат в новый файл
-with open('flat_categories.json', 'w', encoding='utf-8') as f:
+with open(Path(__file__).resolve().parents[1] / 'data' / 'flat_categories.json', 'w', encoding='utf-8') as f:
     json.dump(flat_data, f, ensure_ascii=False, indent=2)
 
 print(f"Готово! Обработано конечных категорий: {len(flat_data)}")

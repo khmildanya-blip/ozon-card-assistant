@@ -1,14 +1,15 @@
-import json, os
+import json
+from pathlib import Path, os
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-DB_DIR = "./chroma_db"
+DB_DIR = str(Path(__file__).resolve().parents[1] / "chroma_db")
 COLLECTION = "ozon_categories"
 
 def build():
     flat_docs = []
-    with open("flat_docs.jsonl", encoding="utf-8") as f:
+    with open(Path(__file__).resolve().parents[1] / "data" / "flat_docs.jsonl", encoding="utf-8") as f:
         for line in f:
             flat_docs.append(json.loads(line))
 

@@ -7,10 +7,10 @@ from openai import OpenAI
 import os
 
 # 1. Подключение к существующей базе ChromaDB
-DB_DIR = "./chroma_db"
+DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
 COLLECTION = "ozon_categories"
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-base")
 

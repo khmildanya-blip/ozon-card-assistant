@@ -13,13 +13,13 @@ class ImageRecognizerRU:
         self.model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
 
         # Переводчик загружаем из ЛОКАЛЬНОЙ папки (решает проблему с кириллицей в пути)
-        local_model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_translator")
+        local_model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_translator")
         print(f"Загрузка переводчика из: {local_model_dir}")
 
         if not os.path.exists(local_model_dir):
             raise FileNotFoundError(
                 f"Папка local_translator не найдена по пути:\n{local_model_dir}\n"
-                "Убедитесь, что папка лежит рядом со скриптом recognizer.py"
+                "Убедитесь, что папка лежит в корне репозитория"
             )
 
         self.translator_model = MarianMTModel.from_pretrained(local_model_dir)

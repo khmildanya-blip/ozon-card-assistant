@@ -1,5 +1,6 @@
 import requests
 import json
+from pathlib import Path
 
 def fetch_ozon_category_tree(client_id, api_key):
     url = "https://api-seller.ozon.ru/v1/description-category/tree"
@@ -22,7 +23,7 @@ def fetch_ozon_category_tree(client_id, api_key):
         data = response.json()
         
         # Сохраняем результат в файл для дальнейшей работы
-        with open("ozon_categories.json", "w", encoding="utf-8") as f:
+        with open(Path(__file__).resolve().parents[1] / "data" / "ozon_categories.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
             
         print("Дерево категорий успешно сохранено в ozon_categories.json")

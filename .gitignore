@@ -1,3 +1,6 @@
 .env
 chroma_db/
 local_translator/
+__pycache__/
+*.py[cod]
+uploads/

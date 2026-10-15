@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 def flatten_tree(nodes, parent_path="", parent_id=None,
                  parent_category_id=None, grandparent_category_id=None):
@@ -51,13 +52,13 @@ def flatten_tree(nodes, parent_path="", parent_id=None,
 
 
 if __name__ == "__main__":
-    with open("ozon_categories.json", encoding="utf-8") as f:
+    with open(Path(__file__).resolve().parents[1] / "data" / "ozon_categories.json", encoding="utf-8") as f:
         data = json.load(f)
 
     flat_docs = flatten_tree(data["result"])
     print(f"Всего узлов: {len(flat_docs)}")
 
-    with open("flat_docs.jsonl", "w", encoding="utf-8") as f:
+    with open(Path(__file__).resolve().parents[1] / "data" / "flat_docs.jsonl", "w", encoding="utf-8") as f:
         for doc in flat_docs:
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
