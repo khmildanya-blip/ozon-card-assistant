@@ -82,11 +82,13 @@ def find_ozon_category(user_query: str, top_k: int = 8):
         return {"error": str(e)}
 
 
-if __name__ == "__main__":
-    query = "книга"
-    print(f"Поисковый запрос: {query}\n")
-
-    result = find_ozon_category(query)
-    print("Итоговый результат:")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+# if __name__ == "__main__":
+#     query = "компьютерная мышь"
+#     print(f"Поисковый запрос: {query}\n")
+#
+#     result = find_ozon_category(query)
+#     print("Итоговый результат:")
+#     print(json.dumps(result, ensure_ascii=False, indent=2))
+#     print(result["description_category_id"])
+#     print(result["type_id"])
 

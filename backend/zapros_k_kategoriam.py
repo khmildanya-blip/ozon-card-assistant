@@ -2,10 +2,11 @@ import os
 import requests
 import json
 from pathlib import Path
+from rag import find_ozon_category
 
 def fetch_category_attributes(client_id, api_key, category_id, type_id):
     url = "https://api-seller.ozon.ru/v1/description-category/attribute"
-    
+
     headers = {
         "Client-Id": client_id,
         "Api-Key": api_key,
@@ -49,6 +50,6 @@ if __name__ == "__main__":
     if not client_id or not api_key:
         raise SystemExit("Задайте OZON_CLIENT_ID и OZON_API_KEY в переменных окружения.")
 
-    category_to_check = 17028715
-    type_to_check = 96250
-    fetch_category_attributes(client_id, api_key, category_to_check, type_to_check)
+    user_query = "книги" # запрос на поиск конкретного предмета
+    rag_result = find_ozon_category(user_query)
+    fetch_category_attributes(client_id, api_key, rag_result["description_category_id"], rag_result["type_id"])
