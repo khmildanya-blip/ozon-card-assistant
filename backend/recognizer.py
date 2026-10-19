@@ -1,136 +1,142 @@
-from transformers import BlipProcessor, BlipForConditionalGeneration, MarianMTModel, MarianTokenizer
-from PIL import Image
-import os
+from openai import OpenAI
+from dotenv import load_dotenv
+import base64
+import json
 import re
+import os
+import mimetypes
 
 
-class ImageRecognizerRU:
-    def __init__(self):
-        print("Загрузка моделей...")
+load_dotenv()
 
-        # BLIP для распознавания (загружается из интернета, проблемы с кириллицей нет)
-        self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
-        self.model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
 
-        # Переводчик загружаем из ЛОКАЛЬНОЙ папки (решает проблему с кириллицей в пути)
-        local_model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_translator")
-        print(f"Загрузка переводчика из: {local_model_dir}")
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
+IMAGE_PATH = os.getenv("IMAGE_PATH", "img.png")
 
-        if not os.path.exists(local_model_dir):
-            raise FileNotFoundError(
-                f"Папка local_translator не найдена по пути:\n{local_model_dir}\n"
-                "Убедитесь, что папка лежит в корне репозитория"
-            )
+if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
+    print("❌ Ошибка: не найдены YANDEX_API_KEY или YANDEX_FOLDER_ID в .env")
+    exit(1)
 
-        self.translator_model = MarianMTModel.from_pretrained(local_model_dir)
-        self.translator_tokenizer = MarianTokenizer.from_pretrained(local_model_dir)
+if not os.path.exists(IMAGE_PATH):
+    print(f" Ошибка: файл {IMAGE_PATH} не найден")
+    print(f"Полный путь: {os.path.abspath(IMAGE_PATH)}")
+    exit(1)
 
-        print("Модели загружены!")
+print(f"✅ Файл найден: {os.path.abspath(IMAGE_PATH)}")
+print(f"📏 Размер: {os.path.getsize(IMAGE_PATH)} байт\n")
 
-    def translate(self, text):
-        """Перевод текста с английского на русский"""
-        inputs = self.translator_tokenizer(text, return_tensors="pt", padding=True)
-        translated = self.translator_model.generate(**inputs)
-        return self.translator_tokenizer.decode(translated[0], skip_special_tokens=True)
+client = OpenAI(
+    api_key=YANDEX_API_KEY,
+    base_url="https://ai.api.cloud.yandex.net/v1",
+    project=YANDEX_FOLDER_ID,
+)
 
-    def clean_caption(self, text):
-        """Очистка описания от лишних слов с помощью регулярных выражений"""
 
-        # 1. Убираем английские префиксы в начале строки
-        text = re.sub(
-            r'^(a photo of |a picture of |an image of |this is a photo of |it is a )',
-            '', text, flags=re.IGNORECASE
-        )
+def image_to_base64(image_path):
+    mime_type, _ = mimetypes.guess_type(image_path)
+    if not mime_type or not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
 
-        # 2. Убираем конструкции типа "A person holding...", "A woman wearing..."
-        text = re.sub(
-            r'^(a|an|the)\s+(person|woman|man|child|boy|girl|people|someone|lady|guy)\s+'
-            r'(holding|wearing|using|carrying|showing|displaying|presenting)\s+(a|an|the|pair of|pairs of)\s+',
-            '', text, flags=re.IGNORECASE
-        )
+    with open(image_path, "rb") as image_file:
+        b64_data = base64.b64encode(image_file.read()).decode("utf-8")
 
-        # 3. Убираем русские префиксы
-        text = re.sub(
-            r'^(фото |изображение |картинка |это фото |это изображение )',
-            '', text, flags=re.IGNORECASE
-        )
+    return f"data:{mime_type};base64,{b64_data}"
 
-        # 4. Убираем русские конструкции типа "Человек, держащий..."
-        text = re.sub(
-            r'^(человек|женщина|мужчина|ребёнок|мальчик|девочка|люди|кто-то|девушка|парень)\s*,?\s*'
-            r'(держащий|держащая|держащее|носящий|носящая|использующий|использующая|показывающий|показывающая)\s+',
-            '', text, flags=re.IGNORECASE
-        )
 
-        # 5. Убираем описание окружения в конце (английский)
-        text = re.sub(
-            r'\s*(on|in|at|against|near|by|next to|in front of|behind)\s+'
-            r'(a|an|the|some|this|that)\s+'
-            r'(wooden|metal|glass|plastic|white|black|brown|red|blue|green|yellow|gray|grey|dark|light|large|small|big|old|new|modern|vintage|rustic|clean|dirty|messy|empty|crowded|bright|dim|sunny|shady)?\s*'
-            r'(table|desk|chair|sofa|couch|bed|floor|ground|wall|shelf|counter|surface|room|kitchen|bathroom|bedroom|office|store|shop|street|garden|park|beach|pool|window|door|background|setting|scene|environment|area|place|spot|location)?\.?$',
-            '', text, flags=re.IGNORECASE
-        )
+def analyze_product(image_path):
+    image_data_url = image_to_base64(image_path)
 
-        # 6. Убираем описание окружения (русский)
-        text = re.sub(
-            r'\s*(на|в|у|около|возле|рядом с|перед|за|на фоне)\s+'
-            r'(деревянном|металлическом|стеклянном|пластиковом|белом|чёрном|черном|коричневом|красном|синем|зелёном|зеленом|жёлтом|желтом|сером|тёмном|темном|светлом|большом|маленьком|старом|новом|современном|чистом|грязном|пустом)?\s*'
-            r'(столе|стуле|диване|кровати|полу|земле|стене|полке|прилавке|поверхности|комнате|кухне|ванной|спальне|офисе|магазине|улице|саду|парке|пляже|бассейне|окне|двери|фоне|месте)?\.?$',
-            '', text, flags=re.IGNORECASE
-        )
+    prompt = """Ты — ассистент для заполнения карточек товаров на Ozon.
+Проанализируй ИЗОБРАЖЕНИЕ и верни СТРОГО валидный JSON объект.
 
-        # Убираем лишние пробелы и точки в конце
-        text = text.strip().rstrip('.')
+КРИТИЧЕСКИ ВАЖНО:
+- Сначала внимательно посмотри на изображение и определи, что на нем изображено
+- НЕ добавляй markdown-обёртки типа ```json ... ```
+- Верни ТОЛЬКО JSON, начиная с { и заканчивая }
+- НЕ копируй примеры — они только для понимания формата
+- Описывай ТОЛЬКО то, что видишь на фото
 
-        # Делаем первую букву заглавной
-        if text:
-            text = text[0].upper() + text[1:]
+Правила:
+1. Только русский язык.
+2. "rag_keyword" — 1-2 слова, название товара в именительном падеже.
+3. "ozon_description" — продающее описание (5-7 предложений).
+   - Описывай ТОЛЬКО товар, а не фон или окружение.
+   - ЗАПРЕЩЕНО: "на изображении", "на фото", "лежит на", "видна".
+   - Используй эмодзи и маркированный список.
+   - ЗАПРЕЩЕНО: "лучший", "топ", "скидка", "акция".
 
-        return text
+ФОРМАТ ОТВЕТА (верни ТОЛЬКО это, без ```json):
+{
+  "rag_keyword": "название товара",
+  "ozon_description": "Описание товара..."
+}
 
-    def recognize(self, image_path):
-        """Распознавание изображения с фокусом на основном объекте"""
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Файл не найден: {image_path}")
+Верни JSON для товара на изображении:"""
 
-        image = Image.open(image_path).convert("RGB")
+    print("🚀 Отправляю запрос к YandexGPT...")
 
-        # Промпт "a photo of" фокусирует модель на объекте, а не на сцене
-        inputs = self.processor(image, text="a photo of", return_tensors="pt")
+    response = client.chat.completions.create(
+        model=f"gpt://{YANDEX_FOLDER_ID}/qwen3.6-35b-a3b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            }
+        ],
+        temperature=0.1,
+        max_tokens=2000,
+    )
 
-        # Beam search для более точного результата (избегает обрезки слов типа dumbbell)
-        out = self.model.generate(
-            **inputs,
-            max_length=100,
-            num_beams=5,
-            no_repeat_ngram_size=2,
-            early_stopping=True
-        )
-        caption_en = self.processor.decode(out[0], skip_special_tokens=True)
+    result_text = response.choices[0].message.content
 
-        # Очищаем от "a photo of" и подобных префиксов
-        caption_en_clean = self.clean_caption(caption_en)
+    print("\n🔎 Сырой ответ модели:")
+    print("=" * 50)
+    print(result_text)
+    print("=" * 50)
 
-        # Переводим на русский
-        caption_ru = self.translate(caption_en_clean)
 
-        # Очищаем и русский вариант
-        caption_ru_clean = self.clean_caption(caption_ru)
+    cleaned_text = result_text.strip()
+    if cleaned_text.startswith("```json"):
+        cleaned_text = cleaned_text[7:]
+    if cleaned_text.startswith("```"):
+        cleaned_text = cleaned_text[3:]
+    if cleaned_text.endswith("```"):
+        cleaned_text = cleaned_text[:-3]
+    cleaned_text = cleaned_text.strip()
 
-        return caption_en_clean, caption_ru_clean
+    print(f"\n🧹 После очистки markdown: {cleaned_text[:100]}...")
 
+    # Ищем JSON
+    json_match = re.search(r'\{[\s\S]*"rag_keyword"[\s\S]*"ozon_description"[\s\S]*\}', cleaned_text)
+    if json_match:
+        json_str = json_match.group(0)
+        print(f"\n📦 Найденный JSON ({len(json_str)} символов): {json_str[:200]}...")
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"\n⚠️ JSON невалиден: {e}")
+            print(f"Полный текст: {json_str}")
+            if not json_str.endswith("}"):
+                json_str += '}'
+                try:
+                    return json.loads(json_str)
+                except:
+                    pass
+
+    raise ValueError(f"Модель не вернула валидный JSON. Сырой ответ:\n{result_text}")
 
 if __name__ == "__main__":
-    recognizer = ImageRecognizerRU()
-
-    image_path = 'img.png'
-
-    if not image_path:
-        print("Путь не указан!")
-        exit()
-
-    print(f"\nРаспознаю: {image_path}")
-    caption_en, caption_ru = recognizer.recognize(image_path)
-
-    print(f"\nEnglish: {caption_en}")
-    print(f"Русский: {caption_ru}")
+    print(f"🔍 Анализирую: {IMAGE_PATH}\n")
+    try:
+        result = analyze_product(IMAGE_PATH)
+        print("\n✅ УСПЕХ!\n")
+        print(" Ключевое слово для RAG:")
+        print(result["rag_keyword"])
+        print("\n Описание для Ozon:")
+        print(result["ozon_description"])
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
