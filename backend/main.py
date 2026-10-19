@@ -1,13 +1,17 @@
 import os
 import tempfile
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List
-from rag import get_chain
-from recognizer import ImageRecognizerRU
+from typing import List, Optional
+from dotenv import load_dotenv
+from rag import find_ozon_category
+from recognizer import analyze_product
 
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 app = FastAPI(
     version="0.1.0"
@@ -23,12 +27,11 @@ app.add_middleware(
 )
 
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(CURRENT_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-chain = get_chain()
-recognizer = ImageRecognizerRU()
 
 class DescriptionRequest(BaseModel):
     product_name: str
@@ -38,30 +41,90 @@ class DescriptionRequest(BaseModel):
 class DescriptionResponse(BaseModel):
     generated_text: str
     seo_keywords: List[str]
+    description_category_id: Optional[int] = None
+    type_id: Optional[int] = None
+    category_name: Optional[str] = None
+    error: Optional[str] = None
 
 
 class RecognitionResponse(BaseModel):
-    english_description: str
-    russian_description: str
+    rag_keyword: str
+    ozon_description: str
+
+
+class AttributeRequest(BaseModel):
+    description_category_id: int
+    type_id: int
 
 
 @app.post("/api/generate-description", response_model=DescriptionResponse)
 async def generate_description(request: DescriptionRequest):
-    """Генерация текста через ИИ"""
+    """Генерация текста через ИИ и поиск категории"""
 
     question = f"Найди категорию для товара: {request.product_name}. Особенности: {', '.join(request.key_features)}"
-    result = chain.invoke(question)
-    generated_text = result["answer"]
+    result = find_ozon_category(question)
     seo_keywords = [request.product_name.lower()] + [f.lower() for f in request.key_features]
+    
+    if "error" in result:
+        return DescriptionResponse(
+            generated_text="Не удалось определить категорию.",
+            seo_keywords=seo_keywords,
+            error=result["error"]
+        )
+    
     return DescriptionResponse(
-        generated_text=generated_text,
-        seo_keywords=seo_keywords
+        generated_text=f"Товар: {request.product_name}. Категория: {result.get('category_name')}",
+        seo_keywords=seo_keywords,
+        description_category_id=result.get("description_category_id"),
+        type_id=result.get("type_id"),
+        category_name=result.get("category_name")
     )
+
+
+@app.post("/api/get-category-attributes")
+async def get_category_attributes(request: AttributeRequest):
+    """Получение обязательных полей для выбранной категории напрямую из Ozon API"""
+    url = "https://api-seller.ozon.ru/v1/description-category/attribute"
+    
+    headers = {
+        "Client-Id": os.getenv("OZON_CLIENT_ID", ""),
+        "Api-Key": os.getenv("OZON_API_KEY", ""),
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "description_category_id": request.description_category_id,
+        "type_id": request.type_id,
+        "language": "RU"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            data = response.json()
+            attributes = data.get("result", [])
+            required_attrs = [
+                {
+                    "name": attr.get("name"),
+                    "id": attr.get("id"),
+                    "type": attr.get("type"),
+                    "is_required": attr.get("is_required")
+                }
+                for attr in attributes if attr.get("is_required")
+            ]
+            
+            return {"status": "success", "attributes": required_attrs}
+        else:
+            raise HTTPException(
+                status_code=response.status_code, 
+                detail=f"Ошибка Ozon API: {response.text}"
+            )
 
 
 @app.post("/api/upload-image")
 async def upload_image(file: UploadFile = File(...)):
-    """Загрузка фотографии от фронта"""
+    """Загрузка фотографии"""
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Можно загружать только изображения")
 
@@ -87,11 +150,15 @@ async def recognize_image(file: UploadFile = File(...)):
         temp_path = temp_file.name
     
     try:
-        english_caption, russian_caption = recognizer.recognize(temp_path)
-        
+        result = analyze_product(temp_path)
         return RecognitionResponse(
-            english_description=english_caption,
-            russian_description=russian_caption
+            rag_keyword=result["rag_keyword"],
+            ozon_description=result["ozon_description"]
         )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"Некорректный формат: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при обработке изображения: {str(e)}")
     finally:
-        os.unlink(temp_path)
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
