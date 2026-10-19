@@ -15,7 +15,7 @@ YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 IMAGE_PATH = os.getenv("IMAGE_PATH", "img.png")
 
 if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
-    print("❌ Ошибка: не найдены YANDEX_API_KEY или YANDEX_FOLDER_ID в .env")
+    print("Ошибка: не найдены YANDEX_API_KEY или YANDEX_FOLDER_ID в .env")
     exit(1)
 
 if not os.path.exists(IMAGE_PATH):
@@ -23,8 +23,8 @@ if not os.path.exists(IMAGE_PATH):
     print(f"Полный путь: {os.path.abspath(IMAGE_PATH)}")
     exit(1)
 
-print(f"✅ Файл найден: {os.path.abspath(IMAGE_PATH)}")
-print(f"📏 Размер: {os.path.getsize(IMAGE_PATH)} байт\n")
+print(f"Файл найден: {os.path.abspath(IMAGE_PATH)}")
+print(f"Размер: {os.path.getsize(IMAGE_PATH)} байт\n")
 
 client = OpenAI(
     api_key=YANDEX_API_KEY,
@@ -74,7 +74,7 @@ def analyze_product(image_path):
 
 Верни JSON для товара на изображении:"""
 
-    print("🚀 Отправляю запрос к YandexGPT...")
+    print("Отправляю запрос к YandexGPT...")
 
     response = client.chat.completions.create(
         model=f"gpt://{YANDEX_FOLDER_ID}/qwen3.6-35b-a3b",
@@ -93,12 +93,6 @@ def analyze_product(image_path):
 
     result_text = response.choices[0].message.content
 
-    print("\n🔎 Сырой ответ модели:")
-    print("=" * 50)
-    print(result_text)
-    print("=" * 50)
-
-
     cleaned_text = result_text.strip()
     if cleaned_text.startswith("```json"):
         cleaned_text = cleaned_text[7:]
@@ -108,17 +102,15 @@ def analyze_product(image_path):
         cleaned_text = cleaned_text[:-3]
     cleaned_text = cleaned_text.strip()
 
-    print(f"\n🧹 После очистки markdown: {cleaned_text[:100]}...")
 
-    # Ищем JSON
     json_match = re.search(r'\{[\s\S]*"rag_keyword"[\s\S]*"ozon_description"[\s\S]*\}', cleaned_text)
     if json_match:
         json_str = json_match.group(0)
-        print(f"\n📦 Найденный JSON ({len(json_str)} символов): {json_str[:200]}...")
+        print(f"\nНайденный JSON ({len(json_str)} символов): {json_str[:200]}...")
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:
-            print(f"\n⚠️ JSON невалиден: {e}")
+            print(f"\nJSON невалиден: {e}")
             print(f"Полный текст: {json_str}")
             if not json_str.endswith("}"):
                 json_str += '}'
@@ -130,13 +122,12 @@ def analyze_product(image_path):
     raise ValueError(f"Модель не вернула валидный JSON. Сырой ответ:\n{result_text}")
 
 if __name__ == "__main__":
-    print(f"🔍 Анализирую: {IMAGE_PATH}\n")
+    print(f"Анализирую: {IMAGE_PATH}\n")
     try:
         result = analyze_product(IMAGE_PATH)
-        print("\n✅ УСПЕХ!\n")
         print(" Ключевое слово для RAG:")
         print(result["rag_keyword"])
         print("\n Описание для Ozon:")
         print(result["ozon_description"])
     except Exception as e:
-        print(f"\n❌ Ошибка: {e}")
+        print(f"\nОшибка: {e}")
