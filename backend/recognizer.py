@@ -14,18 +14,6 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 IMAGE_PATH = os.getenv("IMAGE_PATH", "img.png")
 
-if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
-    print("Ошибка: не найдены YANDEX_API_KEY или YANDEX_FOLDER_ID в .env")
-    exit(1)
-
-if not os.path.exists(IMAGE_PATH):
-    print(f" Ошибка: файл {IMAGE_PATH} не найден")
-    print(f"Полный путь: {os.path.abspath(IMAGE_PATH)}")
-    exit(1)
-
-print(f"Файл найден: {os.path.abspath(IMAGE_PATH)}")
-print(f"Размер: {os.path.getsize(IMAGE_PATH)} байт\n")
-
 client = OpenAI(
     api_key=YANDEX_API_KEY,
     base_url="https://ai.api.cloud.yandex.net/v1",
@@ -122,6 +110,17 @@ def analyze_product(image_path):
     raise ValueError(f"Модель не вернула валидный JSON. Сырой ответ:\n{result_text}")
 
 if __name__ == "__main__":
+    if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
+        print("Ошибка: не найдены YANDEX_API_KEY или YANDEX_FOLDER_ID в .env")
+        exit(1)
+
+    if not os.path.exists(IMAGE_PATH):
+        print(f" Ошибка: файл {IMAGE_PATH} не найден")
+        print(f"Полный путь: {os.path.abspath(IMAGE_PATH)}")
+        exit(1)
+
+    print(f"Файл найден: {os.path.abspath(IMAGE_PATH)}")
+    print(f"Размер: {os.path.getsize(IMAGE_PATH)} байт\n")
     print(f"Анализирую: {IMAGE_PATH}\n")
     try:
         result = analyze_product(IMAGE_PATH)
