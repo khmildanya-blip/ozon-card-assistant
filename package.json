@@ -1,0 +1,11 @@
+{
+  "name": "ozon-card-assistant",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": ".venv/bin/python -m uvicorn main:app --app-dir backend --reload --host 127.0.0.1 --port 8000",
+    "build": "npm --prefix frontend run build",
+    "rag:build": ".venv/bin/python scripts/build_db.py"
+  }
+}

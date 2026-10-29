@@ -7,18 +7,14 @@ import os
 import mimetypes
 
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example"))
 
 
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 IMAGE_PATH = os.getenv("IMAGE_PATH", "img.png")
 
-client = OpenAI(
-    api_key=YANDEX_API_KEY,
-    base_url="https://ai.api.cloud.yandex.net/v1",
-    project=YANDEX_FOLDER_ID,
-)
+
 
 
 def image_to_base64(image_path):
@@ -33,6 +29,17 @@ def image_to_base64(image_path):
 
 
 def analyze_product(image_path):
+    api_key = os.getenv("YANDEX_API_KEY")
+    folder_id = os.getenv("YANDEX_FOLDER_ID")
+    if not api_key or not folder_id:
+        raise RuntimeError("Распознавание фото не настроено: задайте YANDEX_API_KEY и YANDEX_FOLDER_ID в backend/.env. Категорию можно найти по названию.")
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://ai.api.cloud.yandex.net/v1",
+        project=folder_id,
+        timeout=90,
+        max_retries=0,
+    )
     image_data_url = image_to_base64(image_path)
 
     prompt = """Ты — ассистент для заполнения карточек товаров на Ozon.
@@ -65,7 +72,7 @@ def analyze_product(image_path):
     print("Отправляю запрос к YandexGPT...")
 
     response = client.chat.completions.create(
-        model=f"gpt://{YANDEX_FOLDER_ID}/qwen3.6-35b-a3b",
+        model=os.getenv("YANDEX_MODEL", f"gpt://{folder_id}/qwen3.6-35b-a3b"),
         messages=[
             {
                 "role": "user",
@@ -81,33 +88,22 @@ def analyze_product(image_path):
 
     result_text = response.choices[0].message.content
 
-    cleaned_text = result_text.strip()
-    if cleaned_text.startswith("```json"):
-        cleaned_text = cleaned_text[7:]
-    if cleaned_text.startswith("```"):
-        cleaned_text = cleaned_text[3:]
-    if cleaned_text.endswith("```"):
-        cleaned_text = cleaned_text[:-3]
-    cleaned_text = cleaned_text.strip()
+    return parse_product_result(result_text)
 
 
-    json_match = re.search(r'\{[\s\S]*"rag_keyword"[\s\S]*"ozon_description"[\s\S]*\}', cleaned_text)
-    if json_match:
-        json_str = json_match.group(0)
-        print(f"\nНайденный JSON ({len(json_str)} символов): {json_str[:200]}...")
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            print(f"\nJSON невалиден: {e}")
-            print(f"Полный текст: {json_str}")
-            if not json_str.endswith("}"):
-                json_str += '}'
-                try:
-                    return json.loads(json_str)
-                except:
-                    pass
+def parse_product_result(text):
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
+    try:
+        result = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("Модель не вернула валидный JSON с названием товара.")
+    if not isinstance(result, dict) or not isinstance(result.get("rag_keyword"), str) or not result["rag_keyword"].strip():
+        raise ValueError("Модель не определила название товара.")
+    if not isinstance(result.get("ozon_description"), str):
+        raise ValueError("Модель не вернула описание товара.")
+    return {"rag_keyword": result["rag_keyword"].strip(), "ozon_description": result["ozon_description"]}
 
-    raise ValueError(f"Модель не вернула валидный JSON. Сырой ответ:\n{result_text}")
 
 if __name__ == "__main__":
     if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:

@@ -1,0 +1,7 @@
+# API + cloud recognition + literal category search; no local model downloads.
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+python-dotenv>=1.0.0
+httpx>=0.27.0
+openai>=1.12.0

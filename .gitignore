@@ -4,3 +4,11 @@ local_translator/
 __pycache__/
 *.py[cod]
 uploads/
+
+.venv/
+node_modules/
+frontend/dist/
+.env.local
+.env.*.local
+
+.cache/
