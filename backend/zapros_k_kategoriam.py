@@ -52,7 +52,7 @@ if __name__ == "__main__":
 
     user_query = "книги" # запрос на поиск конкретного предмета
     rag_result = find_ozon_category(user_query)
-
+    
     print(f"Запрос был: {user_query}. Система нашла подходящую категорию: {rag_result['category_name']}.")
     ans = input("Подходит ли данная категория под ваш товар? Y/N\n")
     if ans.lower() == "y":

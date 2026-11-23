@@ -1,4 +1,4 @@
-.env
+backend/.env
 chroma_db/
 local_translator/
 __pycache__/

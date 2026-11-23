@@ -7,13 +7,14 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Any
 from dotenv import load_dotenv
 from starlette.concurrency import run_in_threadpool
 from category_search import search_categories
 
-
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+from database import ProductDraft, SessionLocal
 
 app = FastAPI(
     version="0.1.0"
@@ -62,6 +63,57 @@ class AttributeRequest(BaseModel):
     description_category_id: int
     type_id: int
 
+class DraftCreateRequest(BaseModel):
+    user_id: Optional[int] = None
+    status: str = "draft"
+    description_category_id: Optional[int] = None
+    type_id: Optional[int] = None
+    category_name: Optional[str] = None
+    offer_id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    barcode: Optional[str] = None
+    price: Optional[float] = None
+    old_price: Optional[float] = None
+    vat: str = "0"
+    currency_code: str = "RUB"
+    weight: Optional[int] = None
+    weight_unit: str = "g"
+    depth: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    dimension_unit: str = "mm"
+    primary_image: Optional[str] = None
+    images: Optional[List[str]] = None
+    attributes: Optional[Any] = None  # принимает и словарь, и список атрибутов
+
+
+@app.post("/api/drafts")
+def save_draft(draft: DraftCreateRequest):
+    """Сохраняет черновик карточки товара в MySQL"""
+    db = SessionLocal()
+    try:
+        db_draft = ProductDraft(**draft.model_dump())
+        db.add(db_draft)
+        db.commit()
+        db.refresh(db_draft)
+        return {"status": "success", "id": db_draft.id}
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения в БД: {error}")
+    finally:
+        db.close()
+
+
+@app.get("/api/drafts")
+def list_drafts():
+    """Возвращает список сохранённых черновиков"""
+    db = SessionLocal()
+    try:
+        drafts = db.query(ProductDraft).order_by(ProductDraft.created_at.desc()).all()
+        return {"status": "success", "items": drafts}
+    finally:
+        db.close()
 
 @app.post("/api/generate-description", response_model=DescriptionResponse)
 async def generate_description(request: DescriptionRequest):
