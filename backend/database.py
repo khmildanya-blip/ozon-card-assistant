@@ -38,31 +38,13 @@ class ProductDraft(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, nullable=True)
     status = Column(String(32), default="draft")
+    name = Column(String(500), nullable=True)
 
     description_category_id = Column(BigInteger, nullable=True)
     type_id = Column(BigInteger, nullable=True)
     category_name = Column(String(500), nullable=True)
 
-    offer_id = Column(String(255), nullable=True)
-    name = Column(String(500), nullable=True)
-    description = Column(Text, nullable=True)
-    barcode = Column(String(100), nullable=True)
-
-    price = Column(Numeric(10, 2), nullable=True)
-    old_price = Column(Numeric(10, 2), nullable=True)
-    vat = Column(String(10), default="0")
-    currency_code = Column(String(10), default="RUB")
-
-    weight = Column(Integer, nullable=True)
-    weight_unit = Column(String(10), default="g")
-    depth = Column(Integer, nullable=True)
-    width = Column(Integer, nullable=True)
-    height = Column(Integer, nullable=True)
-    dimension_unit = Column(String(10), default="mm")
-
-    primary_image = Column(String(1000), nullable=True)
-    images = Column(JSON, nullable=True)
-    attributes = Column(JSON, nullable=True)
+    card_data = Column(JSON, nullable=True)
 
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())

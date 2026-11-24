@@ -129,12 +129,12 @@ function* save() {
 
     // 2. Отправляем черновик в MySQL на POST /api/drafts
     const payload = {
-      status: 'draft',
-      name: product || null,
-      description_category_id: category?.description_category_id || null,
-      type_id: category?.type_id || null,
-      category_name: category?.category_name || null,
-      attributes: values || {},
+        status: 'draft',
+        name: product || null,
+        description_category_id: category?.description_category_id || null,
+        type_id: category?.type_id || null,
+        category_name: category?.category_name || null,
+        card_data: values || {},
     };
 
     const saved = yield call(request, 'drafts', payload);

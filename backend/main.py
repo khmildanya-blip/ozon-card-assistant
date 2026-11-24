@@ -72,28 +72,12 @@ class AttributeRequest(BaseModel):
     type_id: int
 
 class DraftCreateRequest(BaseModel):
-    user_id: Optional[int] = None
     status: str = "draft"
+    name: Optional[str] = None
     description_category_id: Optional[int] = None
     type_id: Optional[int] = None
     category_name: Optional[str] = None
-    offer_id: Optional[str] = None
-    name: Optional[str] = None
-    description: Optional[str] = None
-    barcode: Optional[str] = None
-    price: Optional[float] = None
-    old_price: Optional[float] = None
-    vat: str = "0"
-    currency_code: str = "RUB"
-    weight: Optional[int] = None
-    weight_unit: str = "g"
-    depth: Optional[int] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
-    dimension_unit: str = "mm"
-    primary_image: Optional[str] = None
-    images: Optional[List[str]] = None
-    attributes: Optional[Any] = None
+    card_data: Optional[Any] = None
 
 
 @app.post("/api/auth/register")
