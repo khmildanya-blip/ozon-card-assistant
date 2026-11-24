@@ -1,5 +1,6 @@
 import os
 import tempfile
+import uuid
 from pathlib import Path
 from importlib.util import find_spec
 import httpx
@@ -63,6 +64,8 @@ class ContentGenerationRequest(BaseModel):
 class ContentGenerationResponse(BaseModel):
     ozon_description: Optional[str] = None
     seo_keywords: List[str] = []
+    raw_text: Optional[str] = None
+    extracted_fields: Optional[dict] = None
 
 class AttributeRequest(BaseModel):
     description_category_id: int
@@ -206,13 +209,11 @@ async def recognize_category(file: UploadFile = File(...)):
 
 
 @app.post("/api/generate-content", response_model=ContentGenerationResponse)
-async def generate_content(
-    request: ContentGenerationRequest,
-    file: Optional[UploadFile] = File(None)
-):
-    """Генерирует описание товара. Фото опционально"""
+async def generate_content(request: ContentGenerationRequest, file: Optional[UploadFile] = File(None)):
     keywords = [request.product_name.lower()] + [f.lower() for f in request.key_features]
     description = None
+    raw_text = None
+    extracted_fields = {}
 
     if file:
         if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
@@ -230,7 +231,20 @@ async def generate_content(
         try:
             from recognizer import analyze_product
             result = await run_in_threadpool(analyze_product, [temp_path])
+            
             description = result.get("ozon_description")
+            raw_text = result.get("raw_text", "")
+            
+            if result.get("category") == "book":
+                extracted_fields = {
+                    "title": result.get("title"),
+                    "author": result.get("author"),
+                    "publisher": result.get("publisher"),
+                    "year": result.get("year"),
+                    "isbn": result.get("isbn"),
+                    "pages_count": result.get("pages_count"),
+                    "cover_type": result.get("cover_type")
+                }
         except Exception:
             description = None
         finally:
@@ -241,7 +255,9 @@ async def generate_content(
 
     return ContentGenerationResponse(
         ozon_description=description,
-        seo_keywords=keywords
+        seo_keywords=keywords,
+        raw_text=raw_text,
+        extracted_fields=extracted_fields if extracted_fields else None
     )
 
 
@@ -263,7 +279,6 @@ async def upload_images(
         if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise HTTPException(status_code=400, detail=f"Файл {file.filename} не является допустимым изображением")
 
-        import uuid
         filename = f"{uuid.uuid4().hex}{os.path.splitext(file.filename or 'image.jpg')[1]}"
         file_path = os.path.join(UPLOAD_DIR, filename)
         
