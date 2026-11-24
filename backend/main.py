@@ -27,7 +27,6 @@ app = FastAPI(
     version="0.1.0"
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,40 +43,63 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
-class DescriptionRequest(BaseModel):
+class CategoryMatch(BaseModel):
+    description_category_id: int = Field(gt=0)
+    type_id: int = Field(gt=0)
+    category_name: str
+
+class CategoryRecognitionResponse(BaseModel):
+    detected_keyword: Optional[str] = None
+    category: Optional[CategoryMatch] = None
+    category_error: Optional[str] = None
+    candidates: List[CategoryMatch] = []
+
+class ContentGenerationRequest(BaseModel):
     product_name: str
-    key_features: List[str]
-
-
-class DescriptionResponse(BaseModel):
-    generated_text: str
-    seo_keywords: List[str]
+    key_features: List[str] = []
     description_category_id: Optional[int] = None
     type_id: Optional[int] = None
-    category_name: Optional[str] = None
-    error: Optional[str] = None
-    error_code: Optional[str] = None
-    source: Optional[str] = None
-    notice: str = ""
-    candidates: List[dict] = []
 
-
-class RecognitionResponse(BaseModel):
-    rag_keyword: str
-    ozon_description: str
-
+class ContentGenerationResponse(BaseModel):
+    ozon_description: Optional[str] = None
+    seo_keywords: List[str] = []
 
 class AttributeRequest(BaseModel):
     description_category_id: int
     type_id: int
 
 class DraftCreateRequest(BaseModel):
+    user_id: Optional[int] = None
     status: str = "draft"
-    name: Optional[str] = None
     description_category_id: Optional[int] = None
     type_id: Optional[int] = None
     category_name: Optional[str] = None
-    card_data: Optional[Any] = None
+    offer_id: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    barcode: Optional[str] = None
+    price: Optional[float] = None
+    old_price: Optional[float] = None
+    vat: str = "0"
+    currency_code: str = "RUB"
+    weight: Optional[int] = None
+    weight_unit: str = "g"
+    depth: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    dimension_unit: str = "mm"
+    primary_image: Optional[str] = None
+    images: Optional[List[str]] = None
+    attributes: Optional[Any] = None
+
+class ValuesRequest(AttributeRequest):
+    attribute_id: int
+    last_value_id: int = 0
+    limit: int = 100
+
+class CategorySearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=200)
+    limit: int = Field(default=20, ge=1, le=50)
 
 
 @app.post("/api/auth/register")
@@ -116,9 +138,8 @@ def save_draft(
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
-    """сохранение черновика, привязанного к пользователю"""
+    """Сохранение черновика, привязанного к пользователю"""
     draft_data = draft.model_dump()
-    # Принудительно записываем ID текущего пользователя
     draft_data["user_id"] = current_user.id 
     
     db_draft = ProductDraft(**draft_data)
@@ -133,38 +154,94 @@ def list_drafts(
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
-    """список черновиков текущего пользователя"""
+    """Список черновиков текущего пользователя"""
     drafts = db.query(ProductDraft).filter(
         ProductDraft.user_id == current_user.id
     ).order_by(ProductDraft.created_at.desc()).all()
     return {"status": "success", "items": drafts}
 
-@app.post("/api/generate-description", response_model=DescriptionResponse)
-async def generate_description(request: DescriptionRequest):
-    """Генерация текста через ИИ и поиск категории"""
 
-    question = ". ".join([request.product_name.strip(), *request.key_features])
-    from rag import find_ozon_category
-    result = await run_in_threadpool(find_ozon_category, question)
-    seo_keywords = [request.product_name.lower()] + [f.lower() for f in request.key_features]
+@app.post("/api/recognize-category", response_model=CategoryRecognitionResponse)
+async def recognize_category(file: UploadFile = File(...)):
+    """Принимает фото, распознает товар и находит категорию Ozon"""
+    if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=400, detail="Можно загружать только изображения")
 
-    if "error" in result:
-        return DescriptionResponse(
-            generated_text="Не удалось определить категорию.",
-            seo_keywords=seo_keywords,
-            error=result["error"],
-            error_code=result.get("error_code"),
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Максимальный размер фото — 10 МБ")
+        
+    suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[file.content_type]
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(content)
+        temp_path = temp_file.name
+
+    try:
+        from recognizer import analyze_product
+        from rag import find_ozon_category
+        
+        recognition = await run_in_threadpool(analyze_product, [temp_path])
+        rag_keyword = recognition.get("rag_keyword")
+
+        result = await run_in_threadpool(find_ozon_category, rag_keyword)
+        
+        if result.get("error"):
+            return CategoryRecognitionResponse(
+                detected_keyword=rag_keyword,
+                category_error=result["error"],
+                candidates=[]
+            )
+            
+        return CategoryRecognitionResponse(
+            detected_keyword=rag_keyword,
+            category=CategoryMatch(**result),
+            candidates=[] 
         )
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Ошибка распознавания: {str(error)}")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
-    return DescriptionResponse(
-        generated_text=f"Товар: {request.product_name}. Категория: {result.get('category_name')}",
-        seo_keywords=seo_keywords,
-        description_category_id=result.get("description_category_id"),
-        type_id=result.get("type_id"),
-        category_name=result.get("category_name"),
-        source=result.get("source"),
-        notice=result.get("notice", ""),
-        candidates=result.get("candidates", []),
+
+@app.post("/api/generate-content", response_model=ContentGenerationResponse)
+async def generate_content(
+    request: ContentGenerationRequest,
+    file: Optional[UploadFile] = File(None)
+):
+    """Генерирует описание товара. Фото опционально"""
+    keywords = [request.product_name.lower()] + [f.lower() for f in request.key_features]
+    description = None
+
+    if file:
+        if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(status_code=400, detail="Недопустимый формат изображения")
+            
+        content = await file.read(10 * 1024 * 1024 + 1)
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Максимальный размер фото — 10 МБ")
+            
+        suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[file.content_type]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(content)
+            temp_path = temp_file.name
+            
+        try:
+            from recognizer import analyze_product
+            result = await run_in_threadpool(analyze_product, [temp_path])
+            description = result.get("ozon_description")
+        except Exception:
+            description = None
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    else:
+        description = f"Описание для товара: {request.product_name}. Особенности: {', '.join(request.key_features)}"
+
+    return ContentGenerationResponse(
+        ozon_description=description,
+        seo_keywords=keywords
     )
 
 
@@ -180,9 +257,8 @@ async def upload_images(
     files: List[UploadFile] = File(...), 
     current_user: User = Depends(get_current_user)
 ):
-    """Загрузка фотографий (макс. 10 МБ каждая)"""
+    """Загрузка нескольких фотографий (макс. 10 МБ каждая)"""
     uploaded_files = []
-    
     for file in files:
         if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise HTTPException(status_code=400, detail=f"Файл {file.filename} не является допустимым изображением")
@@ -206,41 +282,24 @@ async def upload_images(
     return {"status": "success", "files": uploaded_files}
 
 
-@app.post("/api/recognize-image", response_model=RecognitionResponse)
-async def recognize_image(file: UploadFile = File(...)):
-    """Распознавание изображения с помощью нейросети"""
+@app.get("/api/categories")
+async def categories():
+    return await ozon_request("tree", {"language": "RU"})
 
-    if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(status_code=400, detail="Можно загружать только изображения")
 
-    content = await file.read(10 * 1024 * 1024 + 1)
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Максимальный размер фото — 10 МБ")
-    suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[file.content_type]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(content)
-        temp_path = temp_file.name
+@app.post("/api/attribute-values")
+async def attribute_values(request: ValuesRequest):
+    return await ozon_request("attribute/values", {
+        **request.model_dump(), "limit": min(max(request.limit, 1), 1000), "language": "RU"
+    })
 
-    try:
-        from recognizer import analyze_product
-        result = await run_in_threadpool(analyze_product, [temp_path])
-        return RecognitionResponse(
-            rag_keyword=result["rag_keyword"],
-            ozon_description=result["ozon_description"]
-        )
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error))
-    except ValueError:
-        raise HTTPException(status_code=502, detail="Нейросеть не смогла определить товар. Попробуйте другое фото или найдите категорию по названию.")
-    except Exception as error:
-        if getattr(error, "status_code", None) in (401, 403):
-            raise HTTPException(status_code=502, detail="Yandex отклонил доступ к распознаванию. Проверьте YANDEX_API_KEY, YANDEX_FOLDER_ID и права сервисного аккаунта.")
-        if getattr(error, "status_code", None) == 404:
-            raise HTTPException(status_code=502, detail="Модель распознавания Yandex не найдена. Проверьте YANDEX_MODEL в backend/.env.")
-        raise HTTPException(status_code=502, detail="Сервис распознавания недоступен. Проверьте настройки Yandex, доступ к API и повторите запрос; категорию можно найти по названию.")
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+
+@app.post("/api/search-categories")
+async def category_search(request: CategorySearchRequest):
+    query = request.query.strip()
+    if len(query) < 2:
+        raise HTTPException(422, "Введите хотя бы два символа для поиска категории.")
+    return await run_in_threadpool(search_categories, query, request.limit)
 
 
 async def ozon_request(method: str, payload: dict):
@@ -256,80 +315,12 @@ async def ozon_request(method: str, payload: dict):
         raise HTTPException(502, "Не удалось получить данные Ozon. Повторите запрос позже.")
 
 
-@app.get("/api/categories")
-async def categories():
-    return await ozon_request("tree", {"language": "RU"})
-
-
-class ValuesRequest(AttributeRequest):
-    attribute_id: int
-    last_value_id: int = 0
-    limit: int = 100
-
-
-@app.post("/api/attribute-values")
-async def attribute_values(request: ValuesRequest):
-    return await ozon_request("attribute/values", {
-        **request.model_dump(), "limit": min(max(request.limit, 1), 1000), "language": "RU"
-    })
-
-
-class CategorySearchRequest(BaseModel):
-    query: str = Field(min_length=2, max_length=200)
-    limit: int = Field(default=20, ge=1, le=50)
-
-
-@app.post("/api/search-categories")
-async def category_search(request: CategorySearchRequest):
-    query = request.query.strip()
-    if len(query) < 2:
-        raise HTTPException(422, "Введите хотя бы два символа для поиска категории.")
-    return await run_in_threadpool(search_categories, query, request.limit)
-
-
-class CategoryMatch(BaseModel):
-    description_category_id: int = Field(gt=0)
-    type_id: int = Field(gt=0)
-    category_name: str
-
-
-class ProductRecognitionResponse(RecognitionResponse):
-    category: Optional[CategoryMatch] = None
-    category_source: Optional[str] = None
-    category_notice: str = ""
-    category_error: Optional[str] = None
-    category_error_code: Optional[str] = None
-    candidates: List[CategoryMatch] = []
-
-
-@app.post("/api/recognize-product", response_model=ProductRecognitionResponse)
-async def recognize_product(file: UploadFile = File(...)):
-    """One photo -> recognized product -> RAG -> the pair of Ozon IDs."""
-    from rag import find_ozon_category
-    from category_search import search_catalogue
-
-    recognition = await recognize_image(file)
-    result = await run_in_threadpool(find_ozon_category, recognition.rag_keyword)
-    if result.get("error"):
-        # Preserve successful photo recognition even if the category index is unavailable.
-        candidates = await run_in_threadpool(search_catalogue, recognition.rag_keyword, 8)
-        return ProductRecognitionResponse(
-            **recognition.model_dump(), category_error=result["error"],
-            category_error_code=result.get("error_code"), candidates=candidates,
-        )
-    return ProductRecognitionResponse(
-        **recognition.model_dump(), category=CategoryMatch(**result),
-        category_source=result.get("source"), category_notice=result.get("notice", ""),
-        candidates=result.get("candidates", []),
-    )
-
-
 @app.get("/api/health")
 async def health():
     from rag import DB_DIR
     return {
         "status": "ok", "service": "ozon-card-assistant", "api_version": "0.2.0",
-        "capabilities": ["recognize-product", "search-categories", "get-category-attributes"],
+        "capabilities": ["recognize-category", "generate-content", "search-categories", "get-category-attributes"],
         "configuration": {
             "recognition": bool(os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID")),
             "category_refinement": bool(os.getenv("VSEGPT_API_KEY")),
