@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from importlib.util import find_spec
 import httpx
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -14,7 +14,14 @@ from category_search import search_categories
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-from database import ProductDraft, SessionLocal
+from database import ProductDraft, SessionLocal, Base, engine, User
+from sqlalchemy.orm import Session
+from auth import (
+    UserRegister, UserLogin, TokenResponse, 
+    get_password_hash, verify_password, create_access_token, 
+    get_current_user, get_db, ACCESS_TOKEN_EXPIRE_MINUTES
+)
+from datetime import timedelta
 
 app = FastAPI(
     version="0.1.0"
@@ -29,6 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+Base.metadata.create_all(bind=engine)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(CURRENT_DIR, "uploads")
@@ -85,35 +93,67 @@ class DraftCreateRequest(BaseModel):
     dimension_unit: str = "mm"
     primary_image: Optional[str] = None
     images: Optional[List[str]] = None
-    attributes: Optional[Any] = None  # принимает и словарь, и список атрибутов
+    attributes: Optional[Any] = None
+
+
+@app.post("/api/auth/register")
+async def register_user(user: UserRegister, db: Session = Depends(get_db)):
+    """Регистрация нового пользователя"""
+    existing_user = db.query(User).filter(User.username == user.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Имя пользователя уже занято")
+    
+    hashed_password = get_password_hash(user.password)
+    new_user = User(username=user.username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {"message": "Пользователь зарегистрирован", "username": new_user.username}
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login_user(user: UserLogin, db: Session = Depends(get_db)):
+    """Вход пользователя и получение JWT-токена"""
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Неверное имя пользователя или пароль")
+    
+    access_token = create_access_token(
+        data={"sub": db_user.username}, 
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.post("/api/drafts")
-def save_draft(draft: DraftCreateRequest):
-    """Сохраняет черновик карточки товара в MySQL"""
-    db = SessionLocal()
-    try:
-        db_draft = ProductDraft(**draft.model_dump())
-        db.add(db_draft)
-        db.commit()
-        db.refresh(db_draft)
-        return {"status": "success", "id": db_draft.id}
-    except Exception as error:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения в БД: {error}")
-    finally:
-        db.close()
+def save_draft(
+    draft: DraftCreateRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """сохранение черновика, привязанного к пользователю"""
+    draft_data = draft.model_dump()
+    # Принудительно записываем ID текущего пользователя
+    draft_data["user_id"] = current_user.id 
+    
+    db_draft = ProductDraft(**draft_data)
+    db.add(db_draft)
+    db.commit()
+    db.refresh(db_draft)
+    return {"status": "success", "id": db_draft.id}
 
 
 @app.get("/api/drafts")
-def list_drafts():
-    """Возвращает список сохранённых черновиков"""
-    db = SessionLocal()
-    try:
-        drafts = db.query(ProductDraft).order_by(ProductDraft.created_at.desc()).all()
-        return {"status": "success", "items": drafts}
-    finally:
-        db.close()
+def list_drafts(
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """список черновиков текущего пользователя"""
+    drafts = db.query(ProductDraft).filter(
+        ProductDraft.user_id == current_user.id
+    ).order_by(ProductDraft.created_at.desc()).all()
+    return {"status": "success", "items": drafts}
 
 @app.post("/api/generate-description", response_model=DescriptionResponse)
 async def generate_description(request: DescriptionRequest):
@@ -151,23 +191,35 @@ async def get_category_attributes(request: AttributeRequest):
     return {"status": "success", "attributes": data.get("result", [])}
 
 
-@app.post("/api/upload-image")
-async def upload_image(file: UploadFile = File(...)):
-    """Загрузка фотографии"""
-    if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(status_code=400, detail="Можно загружать только изображения")
+@app.post("/api/upload-images")
+async def upload_images(
+    files: List[UploadFile] = File(...), 
+    current_user: User = Depends(get_current_user)
+):
+    """Загрузка фотографий (макс. 10 МБ каждая)"""
+    uploaded_files = []
+    
+    for file in files:
+        if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(status_code=400, detail=f"Файл {file.filename} не является допустимым изображением")
 
-    import uuid
-    filename = f"{uuid.uuid4().hex}{os.path.splitext(file.filename or 'image.jpg')[1]}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
-    content = await file.read(10 * 1024 * 1024 + 1)
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Максимальный размер фото — 10 МБ")
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
+        import uuid
+        filename = f"{uuid.uuid4().hex}{os.path.splitext(file.filename or 'image.jpg')[1]}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        content = await file.read(10 * 1024 * 1024 + 1)
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"Файл {file.filename} превышает 10 МБ")
+            
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
 
-    image_url = f"/uploads/{filename}"
-    return {"status": "success", "url": image_url, "filename": file.filename}
+        uploaded_files.append({
+            "filename": file.filename,
+            "url": f"/uploads/{filename}"
+        })
+    
+    return {"status": "success", "files": uploaded_files}
 
 
 @app.post("/api/recognize-image", response_model=RecognitionResponse)
@@ -187,7 +239,7 @@ async def recognize_image(file: UploadFile = File(...)):
 
     try:
         from recognizer import analyze_product
-        result = await run_in_threadpool(analyze_product, temp_path)
+        result = await run_in_threadpool(analyze_product, [temp_path])
         return RecognitionResponse(
             rag_keyword=result["rag_keyword"],
             ozon_description=result["ozon_description"]
