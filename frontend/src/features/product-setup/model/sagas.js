@@ -6,6 +6,8 @@ import { setupActions as actions } from './slice.js';
 const state = (root) => root.productSetup;
 const DRAFT_KEY = 'ozon-assistant-draft-v1';
 
+let uploadedImages = [];
+
 function* task(label, work, action) {
   yield put(actions.started(label));
   try {
@@ -33,6 +35,15 @@ function* recognize({ payload: file }) {
     const form = new FormData();
     form.append('file', file);
     result = yield call(request, 'recognize-product', form);
+    // Загружаем фото на сервер / в Яндекс.Бакет и запоминаем ссылку
+    try {
+      const uploadForm = new FormData();
+      uploadForm.append('files', file); // ключ именно 'files', как в main.py
+      const uploaded = yield call(request, 'upload-images', uploadForm);
+      uploadedImages = (uploaded.files || []).map((item) => item.url);
+    } catch (uploadError) {
+      console.error('Не удалось загрузить фото:', uploadError);
+    }
     if (!result.rag_keyword)
       throw new Error(
         'Не удалось распознать товар. Попробуйте другое фото или найдите категорию по названию.',
@@ -105,9 +116,16 @@ function* dictionary({ payload: { key, attributeId } }) {
 }
 function* save() {
   try {
-    const { product, category, attributes, values, dictionaries } = yield select(state);
+    const {
+      product,
+      category,
+      attributes,
+      values,
+      dictionaries,
+      images = [],
+    } = yield select(state);
 
-    // 1. Сохраняем локальную копию в браузере (как раньше)
+    // 1. Сохраняем локальную копию в браузере
     yield call(
       [localStorage, 'setItem'],
       DRAFT_KEY,
@@ -127,15 +145,15 @@ function* save() {
       }),
     );
 
-    // 2. Отправляем черновик в MySQL на POST /api/drafts
+    // 2. Собираем данные под схему DraftCreateRequest и отправляем в MySQL
     const payload = {
-        status: 'draft',
-        name: product || null,
-        description_category_id: category?.description_category_id || null,
-        type_id: category?.type_id || null,
-        category_name: category?.category_name || null,
-        picture_data: [],
-        card_data: values || {},
+      status: 'draft',
+      name: product || null,
+      description_category_id: category?.description_category_id || null,
+      type_id: category?.type_id || null,
+      category_name: category?.category_name || null,
+      picture_data: uploadedImages, // сюда передаётся массив ссылок из Яндекс.Бакета
+      card_data: values || {},
     };
 
     const saved = yield call(request, 'drafts', payload);
@@ -186,7 +204,7 @@ export function* setupSaga() {
       attributes,
     ),
     takeEvery(actions.dictionaryRequested.type, dictionary),
-    takeLeading(actions.saveRequested.type, save),
+    takeLeading(actions.saveRequested.type, task, 'Сохраняем черновик…', save),
     takeLeading(actions.restoreRequested.type, restore),
   ]);
 }

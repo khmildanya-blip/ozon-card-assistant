@@ -5,7 +5,7 @@ from datetime import timedelta
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, List, Optional
-
+import boto3
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -388,14 +388,28 @@ async def get_category_attributes(request: AttributeRequest):
     data = await ozon_request("attribute", {**request.model_dump(), "language": "RU"})
     return {"status": "success", "attributes": data.get("result", [])}
 
+def get_s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=os.getenv("S3_ENDPOINT_URL", "https://storage.yandexcloud.net"),
+        aws_access_key_id=os.getenv("S3_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY"),
+    )
 
 @app.post("/api/upload-images")
 async def upload_images(
     files: List[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Загрузка нескольких фотографий (макс. 10 МБ каждая)"""
+    """Загрузка фотографий в облачное хранилище (Yandex Object Storage)"""
+    bucket_name = os.getenv("S3_BUCKET_NAME")
+    endpoint_url = os.getenv("S3_ENDPOINT_URL", "https://storage.yandexcloud.net").rstrip("/")
+    if not bucket_name or not os.getenv("S3_ACCESS_KEY_ID") or not os.getenv("S3_SECRET_ACCESS_KEY"):
+        raise HTTPException(status_code=503, detail="Не настроены ключи S3 в backend/.env")
+
+    s3 = get_s3_client()
     uploaded_files = []
+
     for file in files:
         if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise HTTPException(
@@ -403,19 +417,27 @@ async def upload_images(
                 detail=f"Файл {file.filename} не является допустимым изображением",
             )
 
-        filename = f"{uuid.uuid4().hex}{os.path.splitext(file.filename or 'image.jpg')[1]}"
-        file_path = os.path.join(UPLOAD_DIR, filename)
-
         content = await file.read(10 * 1024 * 1024 + 1)
         if len(content) > 10 * 1024 * 1024:
             raise HTTPException(
-                status_code=413, detail=f"Файл {file.filename} превышает 10 МБ"
+                status_code=413,
+                detail=f"Файл {file.filename} превышает 10 МБ",
             )
 
-        with open(file_path, "wb") as buffer:
-            buffer.write(content)
+        ext = os.path.splitext(file.filename or "image.jpg")[1] or ".jpg"
+        object_key = f"users/{current_user.id}/{uuid.uuid4().hex}{ext}"
 
-        uploaded_files.append({"filename": file.filename, "url": f"/uploads/{filename}"})
+        # Загружаем файл в облако
+        await run_in_threadpool(
+            s3.put_object,
+            Bucket=bucket_name,
+            Key=object_key,
+            Body=content,
+            ContentType=file.content_type,
+        )
+
+        public_url = f"{endpoint_url}/{bucket_name}/{object_key}"
+        uploaded_files.append({"filename": file.filename, "url": public_url})
 
     return {"status": "success", "files": uploaded_files}
 
