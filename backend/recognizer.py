@@ -50,7 +50,7 @@ def image_to_base64(image_path):
 
 def get_universal_prompt():
     return """Ты — умный ассистент для анализа товаров по фото.
-Твоя задача: проанализировать изображения, определить тип товара и извлечь данные.
+Твоя задача: проанализировать изображения, определить тип товара, его основной цвет и извлечь данные.
 
 ШАГ 1: Определи тип товара.
 - Если это КНИГА (видны обложка, корешок, страницы, титульный лист, аннотация), используй формат "book".
@@ -62,6 +62,7 @@ def get_universal_prompt():
 ФОРМАТ 1 (Если это КНИГА):
 {
   "category": "book",
+  "color": "Основной цвет обложки (например, 'Красный', 'Синий с золотым', 'Черный')",
   "title": "Название книги",
   "rag_keyword": "1-2 слова, название товара в именительном падеже",
   "author": "Автор (ФИО)",
@@ -80,6 +81,7 @@ def get_universal_prompt():
 ФОРМАТ 2 (Если это ОБЫЧНЫЙ ТОВАР):
 {
   "category": "general",
+  "color": "Основной цвет товара (например, 'Белый', 'Черный матовый', 'Разноцветный')",
   "rag_keyword": "1-2 слова, название товара в именительном падеже",
   "ozon_description": "Продающее описание товара (5-7 предложений, с эмодзи и маркированным списком. Без слов 'на фото', 'лучший', 'скидка').",
   "raw_text": "Текст с упаковки или самого товара"
@@ -173,7 +175,6 @@ def analyze_product(image_paths):
     if len(content) == 1:
         raise ValueError("Не удалось добавить ни одного изображения для анализа.")
 
-
     attempts = [
         {"disable_thinking": True,  "max_tokens": 8000},
         {"disable_thinking": False, "max_tokens": 8000},
@@ -223,6 +224,7 @@ if __name__ == "__main__":
     existing_images = [p for p in images_to_analyze if os.path.exists(p)]
     if not existing_images:
         print("Ошибка: не найдено ни одного изображения для анализа.")
+        sys.exit(1)
 
     print(f"Анализирую {len(existing_images)} изображений:\n")
     for img in existing_images:
@@ -232,6 +234,7 @@ if __name__ == "__main__":
     try:
         result = analyze_product(existing_images)
         category = result.get("category")
+        
         if category == "book":
             print("ОПРЕДЕЛЕНО: КНИГА")
             print("-" * 40)
@@ -242,6 +245,7 @@ if __name__ == "__main__":
             print("Издательство:", result.get("publisher"))
             print("Год:", result.get("year"))
             print("Тип бумаги:", result.get("paper_type"))
+            print(f"Цвет: {result.get('color', 'Не определен')}")
             print("Язык:", result.get("language"))
             print("ISBN:", result.get("isbn"))
             print("Переплет:", result.get("cover_type"))
@@ -250,6 +254,7 @@ if __name__ == "__main__":
             print("ОПРЕДЕЛЕНО: ОБЫЧНЫЙ ТОВАР")
             print("-" * 40)
             print("Ключевое слово (RAG):", result.get("rag_keyword"))
+            print(f"\nЦвет: {result.get('color', 'Не определен')}")
             print("\nОписание для Ozon:")
             print(result.get("ozon_description"))
 
