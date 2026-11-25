@@ -44,6 +44,8 @@ class ProductDraft(Base):
     type_id = Column(BigInteger, nullable=True)
     category_name = Column(String(500), nullable=True)
 
+    picture_data = Column(JSON, nullable=True)
+
     card_data = Column(JSON, nullable=True)
 
     created_at = Column(TIMESTAMP, server_default=func.now())

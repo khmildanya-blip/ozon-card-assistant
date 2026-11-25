@@ -134,6 +134,7 @@ function* save() {
         description_category_id: category?.description_category_id || null,
         type_id: category?.type_id || null,
         category_name: category?.category_name || null,
+        picture_data: [],
         card_data: values || {},
     };
 

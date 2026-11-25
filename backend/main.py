@@ -120,6 +120,7 @@ class DraftCreateRequest(BaseModel):
     description_category_id: Optional[int] = None
     type_id: Optional[int] = None
     category_name: Optional[str] = None
+    picture_data: Optional[Any] = None
     card_data: Optional[Any] = None
 
 
