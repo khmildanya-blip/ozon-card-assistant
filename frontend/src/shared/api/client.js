@@ -6,11 +6,9 @@ export async function request(path, body) {
 
   // 1. Выносим заголовки в переменную и подставляем JWT-токен, если он есть
   const headers =
-    body instanceof FormData || body === undefined
-      ? {}
-      : { 'Content-Type': 'application/json' };
+    body instanceof FormData || body === undefined ? {} : { 'Content-Type': 'application/json' };
 
-  const token = localStorage.getItem('access_token') || import.meta.env?.VITE_DEV_TOKEN;
+  const token = globalThis.localStorage?.getItem('access_token') || import.meta.env?.VITE_DEV_TOKEN;
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -31,7 +29,7 @@ export async function request(path, body) {
       );
     }
     // 2. Понятное сообщение, если токен отсутствует или истёк
-    if (response.status === 401) {
+    if (response.status === 401 && path !== 'auth/login') {
       throw new Error('Требуется авторизация. Войдите в аккаунт и повторите запрос.');
     }
     if (response.status === 404 || response.status === 405) {
@@ -42,7 +40,12 @@ export async function request(path, body) {
     if (!response.ok || data.error)
       throw new Error(
         typeof (data.detail || data.error) === 'string'
-          ? data.detail || data.error
+          ? (data.detail || data.error)
+              .replace(
+                /^Задайте OZON_CLIENT_ID и OZON_API_KEY на backend$/u,
+                'Каталог пока не подключён. Обратитесь к администратору.',
+              )
+              .replace('Не удалось получить данные Ozon', 'Не удалось получить данные каталога')
           : `Ошибка API (${response.status}). Повторите запрос.`,
       );
     return data;

@@ -5,6 +5,7 @@ import createSagaMiddleware from 'redux-saga';
 import { setupReducer, setupActions as actions } from './slice.js';
 import { setupSaga } from './sagas.js';
 import { flattenCategories } from '../../../entities/product/model/category.js';
+import { cardAttributes, validMeasurement } from '../../../entities/product/model/card-details.js';
 
 function setup(t, fetcher) {
   const previous = globalThis.fetch;
@@ -22,6 +23,47 @@ function setup(t, fetcher) {
   return store;
 }
 const reply = (data) => ({ ok: true, json: async () => data });
+
+test('printed books reject stationery and keep the edition from the catalogue', async (t) => {
+  const stationery = {
+    description_category_id: 1,
+    type_id: 2,
+    category_name: 'Канцелярские товары → Бумажная продукция → Книга учета',
+  };
+  const modern = {
+    description_category_id: 3,
+    type_id: 4,
+    category_name: 'Книги → Современные печатные издания → Печатная книга',
+  };
+  const old = {
+    ...modern,
+    description_category_id: 5,
+    category_name: 'Книги → Букинистические издания → Печатная книга',
+  };
+  const store = setup(t, async (url, options) => {
+    if (url.endsWith('generate-content')) return reply({ extracted_fields: { title: 'Идиот' } });
+    assert.equal(JSON.parse(options.body).query, 'печатная книга');
+    return reply({ categories: [stationery, old, modern], source: 'catalogue' });
+  });
+  store.dispatch(actions.recognized({ rag_keyword: 'Идиот', category: stationery }));
+  store.dispatch(actions.contentRequested({ file: new File(['photo'], 'book.jpg') }));
+  await until(store, (s) => s.contentAttempted && !s.busy);
+  assert.deepEqual(store.getState().productSetup.category, modern);
+  assert.deepEqual(store.getState().productSetup.categories, [modern, old]);
+  assert.deepEqual(
+    cardAttributes([{ name: 'Бренд', is_required: true }, { name: 'Автор' }], modern),
+    [{ name: 'Автор' }],
+  );
+});
+
+test('legacy drafts missing valid dimensions resume on the characteristics step', () => {
+  assert.equal(validMeasurement('2,5'), true);
+  for (const value of ['', '0', '-1', 'неизвестно', '1e2']) {
+    assert.equal(validMeasurement(value), false);
+  }
+  const restored = setupReducer(undefined, actions.draftRestored({ step: 3, values: {} }));
+  assert.equal(restored.step, 2);
+});
 function until(store, predicate) {
   if (predicate(store.getState().productSetup)) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -146,6 +188,70 @@ test('draft save and restore keep dictionary labels and manually entered values'
   await until(store, (s) => s.notice.includes('восстановлен'));
   assert.equal(store.getState().productSetup.values['0:8'], '10');
   assert.equal(store.getState().productSetup.dictionaries['0:8'].options[0].value, 'Белый');
+});
+
+test('draft restore returns ordered photos outside Redux and separates the account draft', async (t) => {
+  const globals = { indexedDB: globalThis.indexedDB, localStorage: globalThis.localStorage };
+  t.after(() => Object.assign(globalThis, globals));
+  const browser = new Map();
+  const drafts = new Map();
+  globalThis.localStorage = { getItem: (key) => browser.get(key) ?? null };
+  globalThis.indexedDB = {
+    open() {
+      const request = {
+        result: {
+          close() {},
+          transaction() {
+            const finish = (result) => {
+              queueMicrotask(() => transaction.oncomplete());
+              return { result };
+            };
+            const transaction = {
+              objectStore: () => ({
+                put: (record, key) => finish(drafts.set(key, record)),
+                get: (key) => finish(drafts.get(key)),
+              }),
+            };
+            return transaction;
+          },
+        },
+      };
+      queueMicrotask(() => request.onsuccess());
+      return request;
+    },
+  };
+  const store = setup(t, async () => {
+    throw new Error('Draft storage should be local');
+  });
+  store.dispatch(actions.setCategory({ description_category_id: 2, type_id: 3 }));
+  store.dispatch(actions.attributesLoaded([{ id: 8 }]));
+  const photo = (name, main) => ({ file: new File([name], name), main });
+  const guest = [photo('cover.jpg', false), photo('spine.jpg', true)];
+  const save = async (photos) => {
+    store.dispatch(actions.saveRequested({ photos }));
+    await until(store, (state) => !state.busy && state.notice.includes('сохранён'));
+  };
+  await save(guest);
+  browser.set('access_token', 'test-token');
+  browser.set('aisellercards.username', 'seller');
+  await save([photo('account.jpg', true)]);
+
+  const restore = async () => {
+    let photos;
+    store.dispatch(
+      actions.restoreRequested({
+        onPhotos: (files) => {
+          photos = files;
+        },
+      }),
+    );
+    await until(store, (state) => !state.busy && state.notice.includes('восстановлен'));
+    return photos;
+  };
+  assert.equal((await restore())[0].file.name, 'account.jpg');
+  browser.delete('access_token');
+  assert.deepEqual(await restore(), guest);
+  assert.equal(store.getState().productSetup.photos, undefined);
 });
 
 test('manual name search is available without a photo and calls the backend search endpoint', async (t) => {

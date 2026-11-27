@@ -7,7 +7,8 @@ const requirements =
   /маркировк|тн\s*вэд|сертификат|деклараци|лицензи|регистрационн.*удостоверени/iu;
 const identity =
   /^(название|наименование|бренд|тип|модель)(\b|\s|$)|название модели|аннотация|описание товара/iu;
-const dimensions = /размер|высот|ширин|длин|глубин|диаметр|объ[её]м|^вместимост|^вес|масса/iu;
+const dimensions =
+  /габарит|размер|высот|ширин|длин|глубин|диаметр|объ[её]м|^вместимост|^вес|масса/iu;
 const contents = /комплектаци|количество в упаковке|единиц в одном товаре|количество предметов/iu;
 const basicProperties = /материал|цвет товара|^цвет$|назначение/iu;
 
@@ -61,7 +62,7 @@ const sections = [
   },
   {
     id: 'requirements',
-    title: 'Требования Ozon',
+    title: 'Обязательные сведения',
     description: 'Обязательные сведения для выбранной категории.',
   },
 ];
@@ -73,6 +74,40 @@ function sectionFor(attribute) {
   if (contents.test(name)) return 'contents';
   if (dimensions.test(name)) return 'dimensions';
   return 'properties';
+}
+
+const fieldPriority = [
+  /модель/iu,
+  /бренд/iu,
+  /^(тип|тип товара)$/iu,
+  /назван|наименован|заголовок/iu,
+  /автор/iu,
+  /издател/iu,
+  /цвет/iu,
+  /материал/iu,
+  /размер|высот|ширин|длин|глубин|диаметр|об[ъе]м/iu,
+  /вес|масса/iu,
+  /комплектац|количество/iu,
+  /описан|аннотац/iu,
+];
+
+function orderedAttributes(attributes) {
+  return attributes
+    .map((attribute, index) => ({ attribute, index }))
+    .sort((left, right) => {
+      const a = left.attribute;
+      const b = right.attribute;
+      const required = Number(Boolean(b.is_required)) - Number(Boolean(a.is_required));
+      if (required) return required;
+      const priority = (attribute) => {
+        const index = fieldPriority.findIndex((pattern) => pattern.test(attribute.name || ''));
+        return index < 0 ? fieldPriority.length : index;
+      };
+      const priorityDiff = priority(a) - priority(b);
+      if (priorityDiff) return priorityDiff;
+      return left.index - right.index;
+    })
+    .map(({ attribute }) => attribute);
 }
 
 export function getAttributeLayout(attributes, category) {
@@ -101,12 +136,11 @@ export function getAttributeLayout(attributes, category) {
     if (important) grouped.get(sectionFor(attribute)).push(attribute);
     else additional.push(attribute);
   }
-  const requiredFirst = (a, b) => Number(Boolean(b.is_required)) - Number(Boolean(a.is_required));
   return {
     groups: sections
-      .map((section) => ({ ...section, attributes: grouped.get(section.id).sort(requiredFirst) }))
+      .map((section) => ({ ...section, attributes: orderedAttributes(grouped.get(section.id)) }))
       .filter((section) => section.attributes.length),
-    additional,
+    additional: orderedAttributes(additional),
     hidden,
   };
 }

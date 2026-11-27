@@ -25,7 +25,7 @@ test('flower pot form shows its useful properties and hides optional content int
   for (const required of fixture.filter((a) => a.is_required)) assert.ok(ids.includes(required.id));
   assert.deepEqual(
     layout.groups.map((g) => g.title),
-    ['О товаре', 'Основные свойства', 'Размеры и вес', 'Комплектация', 'Требования Ozon'],
+    ['О товаре', 'Основные свойства', 'Размеры и вес', 'Комплектация', 'Обязательные сведения'],
   );
 });
 

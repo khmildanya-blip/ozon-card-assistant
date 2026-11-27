@@ -1,12 +1,11 @@
 import { all, call, put, select, takeEvery, takeLeading } from 'redux-saga/effects';
 import { request } from '../../../shared/api/client.js';
 import { categoryPayload } from '../../../entities/product/model/category.js';
+import { printedBookCategories } from '../../../entities/product/model/card-details.js';
+import { readDraft, storeDraft } from '../../../shared/lib/draft-storage.js';
 import { setupActions as actions } from './slice.js';
 
 const state = (root) => root.productSetup;
-const DRAFT_KEY = 'ozon-assistant-draft-v1';
-
-let uploadedImages = [];
 
 function* task(label, work, action) {
   yield put(actions.started(label));
@@ -30,25 +29,28 @@ function* suggestCategory() {
   if (found.notice) yield put(actions.setNotice(found.notice));
 }
 function* recognize({ payload: file }) {
+  const primaryFile = file?.file || file;
   let result;
   try {
     const form = new FormData();
-    form.append('file', file);
-    result = yield call(request, 'recognize-product', form);
-    // Загружаем фото на сервер / в Яндекс.Бакет и запоминаем ссылку
+    form.append('file', primaryFile);
     try {
-      const uploadForm = new FormData();
-      uploadForm.append('files', file); // ключ именно 'files', как в main.py
-      const uploaded = yield call(request, 'upload-images', uploadForm);
-      uploadedImages = (uploaded.files || []).map((item) => item.url);
-    } catch (uploadError) {
-      console.error('Не удалось загрузить фото:', uploadError);
+      result = yield call(request, 'recognize-product', form);
+    } catch (error) {
+      // Older backend revisions expose the same flow as recognize-category.
+      if (!/нужного метода API|404|405/u.test(error.message || '')) throw error;
+      const legacy = yield call(request, 'recognize-category', form);
+      result = {
+        ...legacy,
+        rag_keyword: legacy.detected_keyword,
+        category: legacy.category,
+      };
     }
     if (!result.rag_keyword)
       throw new Error(
         'Не удалось распознать товар. Попробуйте другое фото или найдите категорию по названию.',
       );
-    yield put(actions.recognized(result.rag_keyword));
+    yield put(actions.recognized(result));
   } catch (error) {
     yield put(actions.manualSelectionStarted());
     throw error;
@@ -73,6 +75,91 @@ function* recognize({ payload: file }) {
   if (result.category_error) throw new Error(result.category_error);
   // Compatibility with a backend returning only recognition keywords.
   yield* suggestCategory();
+}
+function* enrichContent({ payload }) {
+  const file = payload?.file || payload;
+  if (!file) return;
+  const current = yield select(state);
+  if (current.contentAttempted) return;
+  yield put(actions.started('Дополняем распознанные данные…'));
+  try {
+    const files = payload?.files?.length ? payload.files : [file];
+    // One bad/unsupported extra image must not discard the description obtained
+    // from the other images. Process them independently and merge successful
+    // responses below.
+    const results = [];
+    for (const image of files) {
+      try {
+        const form = new FormData();
+        form.append(
+          'request',
+          JSON.stringify({ product_name: current.product || '', key_features: [] }),
+        );
+        form.append('file', image);
+        results.push(yield call(request, 'generate-content', form));
+      } catch {
+        // Continue with the next photo. The primary photo can still provide
+        // all content even if an additional image is not readable by AI.
+      }
+    }
+    if (!results.length) throw new Error('Не удалось получить данные по фото.');
+    const colors = results.map((item) => item.color).filter(Boolean);
+    const color = colors.sort(
+      (a, b) =>
+        colors.filter((value) => value === b).length - colors.filter((value) => value === a).length,
+    )[0];
+    const merged = results.reduce(
+      (acc, item) => ({
+        ...acc,
+        ...item,
+        // Do not let a secondary photo with no readable text erase the
+        // description/title returned for the primary photo.
+        ozon_description: item.ozon_description || acc.ozon_description,
+        raw_text: item.raw_text || acc.raw_text,
+        color: color || acc.color || item.color,
+        extracted_fields: {
+          ...(acc.extracted_fields || {}),
+          ...(item.extracted_fields || {}),
+          dimensions: {
+            ...(acc.extracted_fields?.dimensions || {}),
+            ...(item.extracted_fields?.dimensions || {}),
+          },
+        },
+      }),
+      {},
+    );
+    yield put(actions.contentLoaded(merged));
+
+    // If the recognizer saw a book but the semantic category was unrelated,
+    // correct it through the existing category-search API. This keeps the
+    // backend contract unchanged and prevents book fields from being loaded
+    // for an apparel/electronics category.
+    const latest = yield select(state);
+    const fields = merged.extracted_fields;
+    const isBook = Boolean(fields?.title || fields?.author || fields?.publisher);
+    if (isBook && !printedBookCategories([latest.category]).length) {
+      yield put(actions.setCategory(null));
+      yield put(actions.categorySearchStarted());
+      try {
+        const bookCategories = yield call(request, 'search-categories', {
+          query: 'печатная книга',
+          limit: 20,
+        });
+        const categories = printedBookCategories(bookCategories.categories || [], fields?.year);
+        yield put(actions.categorySearchCompleted({ ...bookCategories, categories }));
+        if (categories.length) yield put(actions.setCategory(categories[0]));
+      } catch {
+        // Manual category selection stays available if the search fails.
+      }
+      yield put(actions.setNotice('Проверьте категорию по году выпуска вашего издания.'));
+    }
+  } catch (error) {
+    // Enrichment is optional: category recognition must remain usable when the LLM is unavailable.
+    yield put(actions.contentFailed());
+    yield put(actions.setNotice('Категория определена. Автозаполнение временно недоступно.'));
+  } finally {
+    yield put(actions.finished());
+  }
 }
 function* searchCategory({ payload }) {
   const current = yield select(state);
@@ -114,64 +201,50 @@ function* dictionary({ payload: { key, attributeId } }) {
     yield put(actions.dictionaryFailed({ key, error: error.message }));
   }
 }
-function* save() {
+function* save({ payload }) {
   try {
-    const {
+    const { product, category, attributes, values, dictionaries, recognition, content, step } =
+      yield select(state);
+
+    const photos = payload?.photos || [];
+    yield call(storeDraft, {
+      version: 1,
       product,
       category,
+      step,
+      recognition,
+      content,
       attributes,
       values,
-      dictionaries,
-      images = [],
-    } = yield select(state);
-
-    // 1. Сохраняем локальную копию в браузере
-    yield call(
-      [localStorage, 'setItem'],
-      DRAFT_KEY,
-      JSON.stringify({
-        version: 1,
-        product,
-        category,
-        attributes,
-        values,
-        dictionaries: Object.fromEntries(
-          Object.entries(dictionaries).map(([key, entry]) => [
-            key,
-            { options: entry.options, more: entry.more, busy: false, error: '' },
-          ]),
-        ),
-        savedAt: new Date().toISOString(),
-      }),
-    );
-
-    // 2. Собираем данные под схему DraftCreateRequest и отправляем в MySQL
-    const payload = {
-      status: 'draft',
-      name: product || null,
-      description_category_id: category?.description_category_id || null,
-      type_id: category?.type_id || null,
-      category_name: category?.category_name || null,
-      picture_data: uploadedImages, // сюда передаётся массив ссылок из Яндекс.Бакета
-      card_data: values || {},
-    };
-
-    const saved = yield call(request, 'drafts', payload);
+      dictionaries: Object.fromEntries(
+        Object.entries(dictionaries).map(([key, entry]) => [
+          key,
+          { options: entry.options, more: entry.more, busy: false, error: '' },
+        ]),
+      ),
+      photos,
+      savedAt: new Date().toISOString(),
+    });
     yield put(
-      actions.setNotice(`Черновик #${saved.id} сохранён в базе данных.`),
+      actions.setNotice(
+        photos.length
+          ? 'Черновик с фотографиями сохранён в этом браузере.'
+          : 'Черновик сохранён в этом браузере.',
+      ),
     );
   } catch (error) {
     yield put(
       actions.setError(
-        error.message || 'Не удалось сохранить черновик на сервере.',
+        error?.name === 'QuotaExceededError'
+          ? 'Недостаточно места для черновика. Удалите лишние фотографии и повторите сохранение.'
+          : 'Не удалось сохранить черновик. Проверьте, разрешено ли браузеру сохранять данные сайта.',
       ),
     );
   }
 }
-function* restore() {
+function* restore({ payload }) {
   try {
-    const raw = yield call([localStorage, 'getItem'], DRAFT_KEY);
-    const draft = JSON.parse(raw);
+    const draft = yield call(readDraft);
     if (
       !draft ||
       draft.version !== 1 ||
@@ -183,7 +256,9 @@ function* restore() {
       typeof draft.values !== 'object'
     )
       throw new Error();
-    yield put(actions.draftRestored(draft));
+    const { photos = [], ...data } = draft;
+    if (payload?.onPhotos) yield call(payload.onPhotos, photos);
+    yield put(actions.draftRestored(data));
   } catch {
     yield put(actions.setError('Сохранённого черновика нет или он повреждён.'));
   }
@@ -193,18 +268,19 @@ export function* setupSaga() {
     takeLeading(
       actions.recognizeRequested.type,
       task,
-      'Распознаём товар и подбираем категорию Ozon…',
+      'Распознаём товар и подбираем категорию…',
       recognize,
     ),
+    takeLeading(actions.contentRequested.type, enrichContent),
     takeLeading(actions.categorySearchRequested.type, task, 'Ищем категории…', searchCategory),
     takeLeading(
       actions.attributesRequested.type,
       task,
-      'Получаем характеристики из Ozon…',
+      'Загружаем характеристики категории…',
       attributes,
     ),
     takeEvery(actions.dictionaryRequested.type, dictionary),
     takeLeading(actions.saveRequested.type, task, 'Сохраняем черновик…', save),
-    takeLeading(actions.restoreRequested.type, restore),
+    takeLeading(actions.restoreRequested.type, task, 'Открываем черновик…', restore),
   ]);
 }

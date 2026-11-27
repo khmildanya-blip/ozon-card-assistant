@@ -8,7 +8,14 @@ export const store = configureStore({
   middleware: (getDefault) =>
     getDefault({
       // File is passed to Saga as a command; it is never stored in Redux state.
-      serializableCheck: { ignoredActions: ['productSetup/recognizeRequested'] },
+      serializableCheck: {
+        ignoredActions: [
+          'productSetup/recognizeRequested',
+          'productSetup/contentRequested',
+          'productSetup/saveRequested',
+          'productSetup/restoreRequested',
+        ],
+      },
     }).concat(saga),
 });
 saga.run(setupSaga);
